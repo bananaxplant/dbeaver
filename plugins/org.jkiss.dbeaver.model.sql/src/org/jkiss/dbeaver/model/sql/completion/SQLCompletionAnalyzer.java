@@ -884,6 +884,24 @@ public class SQLCompletionAnalyzer implements DBRRunnableParametrized<DBRProgres
                     }
                 }
             }
+            if (childObject == null && objectName != null && DBStructUtils.isConnectedContainer(sc)) {
+                try {
+                    Collection<? extends DBSObject> children = sc.getChildren(monitor);
+                    if (!CommonUtils.isEmpty(children)) {
+                        for (DBSObject child : children) {
+                            if (child instanceof DBSAlias && objectName.equalsIgnoreCase(child.getName())) {
+                                DBSObject targetObject = ((DBSAlias) child).getTargetObject(monitor);
+                                if (targetObject != null) {
+                                    childObject = targetObject;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                } catch (DBException e) {
+                    log.debug("Error resolving synonym/alias: " + e.getMessage());
+                }
+            }
             if (childObject == null) {
                 if (i == 0) {
                     // Assume it's a table alias ?
