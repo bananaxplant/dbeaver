@@ -682,11 +682,11 @@ public abstract class SQLQueryCompletionContext {
             }
 
             private void prepareObjectComponentCompletions(
-                @NotNull DBRProgressMonitor monitor,
-                @NotNull DBSObject object,
-                @NotNull SQLQueryWordEntry componentNamePart,
-                @NotNull List<Class<? extends DBSObject>> componentTypes,
-                @NotNull List<SQLQueryCompletionSet> results
+                    @NotNull DBRProgressMonitor monitor,
+                    @NotNull DBSObject object,
+                    @NotNull SQLQueryWordEntry componentNamePart,
+                    @NotNull List<Class<? extends DBSObject>> componentTypes,
+                    @NotNull List<SQLQueryCompletionSet> results
             ) {
                 try {
                     Collection<? extends DBSObject> components;
@@ -713,9 +713,36 @@ public abstract class SQLQueryCompletionContext {
                             }
                         }
                     }
+
+                    // Also collect procedures from DBSProcedureContainer (e.g., Oracle packages)
+                    if (object instanceof DBSProcedureContainer procContainer) {
+                        this.collectProcedureCompletions(monitor, procContainer, componentNamePart, componentTypes, items);
+                    }
+
                     this.makeFilteredCompletionSet(componentNamePart, items, results);
                 } catch (DBException ex) {
                     log.error(ex);
+                }
+            }
+
+            private void collectProcedureCompletions(
+                    @NotNull DBRProgressMonitor monitor,
+                    @NotNull DBSProcedureContainer procContainer,
+                    @NotNull SQLQueryWordEntry componentNamePart,
+                    @NotNull List<Class<? extends DBSObject>> componentTypes,
+                    @NotNull LinkedList<SQLQueryCompletionItem> items
+            ) throws DBException {
+                Collection<? extends DBSProcedure> procedures = procContainer.getProcedures(monitor);
+                if (procedures != null) {
+                    for (DBSProcedure proc : procedures) {
+                        if (componentTypes.stream().anyMatch(t -> t.isInstance(proc))) {
+                            SQLQueryWordEntry filter = makeFilterInfo(componentNamePart, proc.getName());
+                            int score = filter.matches(componentNamePart, this.searchInsideWords);
+                            if (score > 0) {
+                                items.addLast(this.makeDbObjectCompletionItem(score, filter, null, proc));
+                            }
+                        }
+                    }
                 }
             }
 
