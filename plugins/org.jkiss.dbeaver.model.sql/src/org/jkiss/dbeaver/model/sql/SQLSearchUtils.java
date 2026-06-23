@@ -301,6 +301,32 @@ public class SQLSearchUtils {
                     return objs;
                 }
             }
+            if (anyObject && child == null && parent instanceof DBSProcedureContainer procsContainer
+                    && parent.getDataSource().getInfo().supportsStoredCode()
+            ) {
+                List<? extends DBSObject> objs = findProcedures(monitor, procsContainer, childName);
+                if (objs.size() > 0) {
+                    return objs;
+                }
+            }
+            if (child == null && DBStructUtils.isConnectedContainer(parent)) {
+                // Try to find synonym/alias as fallback
+                // NOTE: getChildren() hits warm cache since cacheStructure() was called above (line 291)
+                try {
+                    Collection<? extends DBSObject> children = parent.getChildren(monitor);
+                    for (DBSObject potentialAlias : children) {
+                        if (potentialAlias instanceof DBSAlias && childName.equalsIgnoreCase(potentialAlias.getName())) {
+                            DBSObject targetObject = ((DBSAlias) potentialAlias).getTargetObject(monitor);
+                            if (targetObject != null) {
+                                child = targetObject;
+                                break;
+                            }
+                        }
+                    }
+                } catch (DBException e) {
+                    log.debug("Error resolving synonym/alias: " + e.getMessage());
+                }
+            }
             if (child == null) {
                 break;
             }
