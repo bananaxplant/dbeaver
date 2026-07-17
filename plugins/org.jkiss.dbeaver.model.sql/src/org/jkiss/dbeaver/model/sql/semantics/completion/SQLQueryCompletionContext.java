@@ -461,10 +461,10 @@ public abstract class SQLQueryCompletionContext {
                     expectedTypes.add(DBSTable.class);
                     expectedTypes.add(DBSView.class);
                     expectedTypes.add(DBSAlias.class);
-                    if (request.getContext().isSearchProcedures()) {
-                        expectedTypes.add(DBSProcedure.class);
-                        expectedTypes.add(DBSPackage.class);
-                    }
+                    // Dotted prefixes (schema. / package.) must surface packages and their members.
+                    // isSearchProcedures (SHOW_COLUMN_PROCEDURES) only gates free/unprefixed column lists.
+                    expectedTypes.add(DBSPackage.class);
+                    expectedTypes.add(DBSProcedure.class);
                     try {
                         this.collectImmediateChildren(
                             monitor,
@@ -475,11 +475,56 @@ public abstract class SQLQueryCompletionContext {
                             filterOrNull,
                             items
                         );
+                        // Package members are often exposed via DBSProcedureContainer rather than getChildren alone.
+                        this.collectDottedPrefixProcedures(monitor, request, prefixContext, prefixInfo, filterOrNull, items);
                     } catch (DBException e) {
                         log.error(e);
                     }
                 }
                 return items;
+            }
+
+            /**
+             * Collect procedures/functions when the dotted prefix is a package (or similar procedure container).
+             * Does not apply the SHOW_COLUMN_PROCEDURES preference — that flag is for free column lists only.
+             */
+            private void collectDottedPrefixProcedures(
+                @NotNull DBRProgressMonitor monitor,
+                @NotNull SQLCompletionRequest request,
+                @NotNull DBSObject prefixContext,
+                @Nullable SQLQueryCompletionItem.ContextObjectInfo prefixInfo,
+                @Nullable SQLQueryWordEntry filterOrNull,
+                @NotNull LinkedList<SQLQueryCompletionItem> items
+            ) throws DBException {
+                if (!(prefixContext instanceof DBSProcedureContainer pc)
+                    || prefixContext instanceof DBSSchema
+                    || prefixContext instanceof DBSCatalog
+                ) {
+                    return;
+                }
+                DBPDataSource dataSource = request.getContext().getDataSource();
+                if (dataSource == null || !dataSource.getInfo().supportsStoredCode()) {
+                    return;
+                }
+                Collection<? extends DBSProcedure> procedures = pc.getProcedures(monitor);
+                if (procedures == null) {
+                    return;
+                }
+                Set<String> alreadyProposed = items.stream()
+                    .map(i -> i.getObject() != null ? i.getObject().getName() : null)
+                    .filter(Objects::nonNull)
+                    .map(String::toUpperCase)
+                    .collect(Collectors.toSet());
+                for (DBSProcedure p : procedures) {
+                    if (p.getName() == null || alreadyProposed.contains(p.getName().toUpperCase())) {
+                        continue;
+                    }
+                    SQLQueryWordEntry childName = makeFilterInfo(filterOrNull, p.getName());
+                    int score = childName.matches(filterOrNull, this.searchInsideWords);
+                    if (score > 0) {
+                        items.addLast(SQLQueryCompletionItem.forProcedureObject(score, childName, prefixInfo, p));
+                    }
+                }
             }
 
             private void collectImmediateChildren(
@@ -650,10 +695,10 @@ public abstract class SQLQueryCompletionContext {
                     expectedTypes.add(DBSCatalog.class);
                     expectedTypes.add(DBSTable.class);
                     expectedTypes.add(DBSView.class);
-                    if (request.getContext().isSearchProcedures()) {
-                        expectedTypes.add(DBSProcedure.class);
-                        expectedTypes.add(DBSPackage.class);
-                    }
+                    // Dotted prefixes (schema. / package.) must surface packages and their members.
+                    // isSearchProcedures (SHOW_COLUMN_PROCEDURES) only gates free/unprefixed column lists.
+                    expectedTypes.add(DBSProcedure.class);
+                    expectedTypes.add(DBSPackage.class);
                     expectedTypes.add(DBSSequence.class);
                     try {
                         this.collectImmediateChildren(
@@ -665,6 +710,7 @@ public abstract class SQLQueryCompletionContext {
                             filterOrNull,
                             items
                         );
+                        this.collectDottedPrefixProcedures(monitor, request, prefixContext, prefixInfo, filterOrNull, items);
                     } catch (DBException e) {
                         log.error(e);
                     }
@@ -714,8 +760,12 @@ public abstract class SQLQueryCompletionContext {
                         }
                     }
 
-                    // Also collect procedures from DBSProcedureContainer (e.g., Oracle packages)
-                    if (object instanceof DBSProcedureContainer procContainer) {
+                    // Package members via DBSProcedureContainer (e.g. Oracle packages).
+                    // Skip schemas/catalogs: they implement the interface for standalone procs, not package body members.
+                    if (object instanceof DBSProcedureContainer procContainer
+                        && !(object instanceof DBSSchema)
+                        && !(object instanceof DBSCatalog)
+                    ) {
                         this.collectProcedureCompletions(monitor, procContainer, componentNamePart, componentTypes, items);
                     }
 
@@ -733,15 +783,19 @@ public abstract class SQLQueryCompletionContext {
                     @NotNull LinkedList<SQLQueryCompletionItem> items
             ) throws DBException {
                 Collection<? extends DBSProcedure> procedures = procContainer.getProcedures(monitor);
-                if (procedures != null) {
-                    for (DBSProcedure proc : procedures) {
-                        if (componentTypes.stream().anyMatch(t -> t.isInstance(proc))) {
-                            SQLQueryWordEntry filter = makeFilterInfo(componentNamePart, proc.getName());
-                            int score = filter.matches(componentNamePart, this.searchInsideWords);
-                            if (score > 0) {
-                                items.addLast(this.makeDbObjectCompletionItem(score, filter, null, proc));
-                            }
-                        }
+                if (procedures == null) {
+                    return;
+                }
+                boolean acceptAny = componentTypes.isEmpty()
+                    || componentTypes.stream().anyMatch(t -> t == DBSObject.class || t == DBSProcedure.class);
+                for (DBSProcedure proc : procedures) {
+                    if (!acceptAny && componentTypes.stream().noneMatch(t -> t.isInstance(proc))) {
+                        continue;
+                    }
+                    SQLQueryWordEntry filter = makeFilterInfo(componentNamePart, proc.getName());
+                    int score = filter.matches(componentNamePart, this.searchInsideWords);
+                    if (score > 0) {
+                        items.addLast(this.makeDbObjectCompletionItem(score, filter, null, proc));
                     }
                 }
             }
@@ -903,7 +957,11 @@ public abstract class SQLQueryCompletionContext {
                         @NotNull SQLQueryCompletionItem.ContextObjectInfo prefix,
                         @NotNull Set<DBSObjectType> memberTypes
                     ) {
-                        if (memberTypes.size() == 1 && (memberTypes.contains(RelationalObjectType.TYPE_UNKNOWN) || memberTypes.isEmpty())) {
+                        // Empty memberTypes (common for DbObjectFromDbObject) means "any child of the prefix object"
+                        // — e.g. packages under a schema, procedures under a package.
+                        if (memberTypes.isEmpty()
+                            || (memberTypes.size() == 1 && memberTypes.contains(RelationalObjectType.TYPE_UNKNOWN))
+                        ) {
                             makeFilteredCompletionSet(
                                 filterOrNull,
                                 accomplishTableReferences(
