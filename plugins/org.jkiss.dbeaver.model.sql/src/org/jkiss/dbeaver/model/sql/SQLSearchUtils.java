@@ -290,44 +290,57 @@ public class SQLSearchUtils {
             String childName = names.get(i);
             parent.cacheStructure(monitor, DBSObjectContainer.STRUCT_ENTITIES);
             DBSObject child = parent.getChild(monitor, childName);
+            log.debug("[SQLCompletion.dotted] findNestedObjects parent=" + parent.getName()
+                + " childName=" + childName
+                + " getChild=" + (child == null ? "null" : child.getClass().getSimpleName() + "(" + child.getName() + ")"));
             if (!DBStructUtils.isConnectedContainer(child)) {
                 child = null;
             }
-            if (anyObject && child == null && parent instanceof DBSProcedureContainer procsContainer
+            // Package procedures under a package, and packages under a schema, are first-class
+            // completion targets. Look them up even when anyObject is false.
+            if (child == null && parent instanceof DBSProcedureContainer procsContainer
+                && parent.getDataSource() != null
                 && parent.getDataSource().getInfo().supportsStoredCode()
             ) {
                 List<? extends DBSObject> objs = findProcedures(monitor, procsContainer, childName);
-                if (objs.size() > 0) {
-                    return objs;
-                }
-            }
-            if (anyObject && child == null && parent instanceof DBSProcedureContainer procsContainer
-                    && parent.getDataSource().getInfo().supportsStoredCode()
-            ) {
-                List<? extends DBSObject> objs = findProcedures(monitor, procsContainer, childName);
-                if (objs.size() > 0) {
+                if (!objs.isEmpty()) {
+                    log.debug("[SQLCompletion.dotted] findNestedObjects procedure match for " + childName);
                     return objs;
                 }
             }
             if (child == null && DBStructUtils.isConnectedContainer(parent)) {
-                // Try to find synonym/alias as fallback
-                // NOTE: getChildren() hits warm cache since cacheStructure() was called above (line 291)
+                // Fallback: case-insensitive scan of children (packages, synonyms, etc.)
+                // NOTE: getChildren() hits warm cache since cacheStructure() was called above
                 try {
                     Collection<? extends DBSObject> children = parent.getChildren(monitor);
-                    for (DBSObject potentialAlias : children) {
-                        if (potentialAlias instanceof DBSAlias && childName.equalsIgnoreCase(potentialAlias.getName())) {
-                            DBSObject targetObject = ((DBSAlias) potentialAlias).getTargetObject(monitor);
-                            if (targetObject != null) {
-                                child = targetObject;
+                    if (children != null) {
+                        for (DBSObject candidate : children) {
+                            if (candidate.getName() == null || !childName.equalsIgnoreCase(candidate.getName())) {
+                                continue;
+                            }
+                            if (candidate instanceof DBSAlias alias) {
+                                DBSObject targetObject = alias.getTargetObject(monitor);
+                                if (targetObject != null) {
+                                    child = targetObject;
+                                    log.debug("[SQLCompletion.dotted] findNestedObjects alias "
+                                        + candidate.getName() + " -> " + targetObject.getName());
+                                    break;
+                                }
+                            } else {
+                                child = candidate;
+                                log.debug("[SQLCompletion.dotted] findNestedObjects children scan match "
+                                    + candidate.getClass().getSimpleName() + "(" + candidate.getName() + ")");
                                 break;
                             }
                         }
                     }
                 } catch (DBException e) {
-                    log.debug("Error resolving synonym/alias: " + e.getMessage());
+                    log.debug("[SQLCompletion.dotted] Error resolving child/alias: " + e.getMessage());
                 }
             }
             if (child == null) {
+                log.debug("[SQLCompletion.dotted] findNestedObjects: no child '" + childName
+                    + "' under " + parent.getName());
                 break;
             }
             if (i == names.size() - 1) {
