@@ -48,6 +48,7 @@ import org.jkiss.dbeaver.model.stm.STMTreeTermErrorNode;
 import org.jkiss.dbeaver.model.stm.STMTreeTermNode;
 import org.jkiss.dbeaver.model.struct.*;
 import org.jkiss.dbeaver.model.struct.rdb.*;
+import org.jkiss.utils.CommonUtils;
 import org.jkiss.utils.Pair;
 
 import java.util.*;
@@ -361,6 +362,12 @@ public abstract class SQLQueryCompletionContext {
                     this.prepareInspectedFreeCompletions(monitor, request, completionSets);
                 }
 
+                // Value expressions (WHERE col = lu.ort.) often have a lexicalItem/origin path and empty
+                // semantic nameNodes, so prepareInspectedIdentifierCompletions is never reached.
+                // Always force schema.package metadata completion from the word detector in that case
+                // (same idea as classic SQLCompletionAnalyzer.splitWordPart).
+                this.forceDottedMetadataCompletion(monitor, request, parts, completionSets);
+
                 boolean keywordsAllowed = (lexicalItem == null || (lexicalItem.getOrigin() != null && !lexicalItem.getOrigin().isChained()) || (lexicalItem.getSymbolClass() != null && potentialKeywordPartClassification.contains(lexicalItem.getSymbolClass()))) && !hasPeriod;
                 if (keywordsAllowed) {
                     this.prepareKeywordCompletions(syntaxInspectionResult.predictedWords(), currentWord, completionSets);
@@ -373,6 +380,98 @@ public abstract class SQLQueryCompletionContext {
                     + " items=" + totalItems);
 
                 return completionSets;
+            }
+
+            /**
+             * Ensure dotted FQN completion (schema. / package.) runs even when the semantic nameNodes
+             * path was skipped. Breakpoint-friendly entry for {@code lu.} in WHERE/value contexts.
+             */
+            private void forceDottedMetadataCompletion(
+                @NotNull DBRProgressMonitor monitor,
+                @NotNull SQLCompletionRequest request,
+                @NotNull List<SQLQueryWordEntry> semanticParts,
+                @NotNull List<SQLQueryCompletionSet> results
+            ) {
+                List<SQLQueryWordEntry> dottedParts = this.resolveDottedWordParts(request, semanticParts);
+                dottedTrace("[SQLCompletion.dotted] forceDottedMetadataCompletion"
+                    + " hasPeriod=" + hasPeriod
+                    + " nameNodesLen=" + nameNodes.length
+                    + " semanticParts=" + formatWordParts(semanticParts)
+                    + " dottedParts=" + formatWordParts(dottedParts)
+                    + " wordPart=" + (request.getWordDetector() == null ? "<null>" : request.getWordDetector().getWordPart())
+                );
+                if (dottedParts == null || dottedParts.size() < 2) {
+                    return;
+                }
+                // Need a non-empty container prefix (everything before the last segment / trailing dot).
+                List<SQLQueryWordEntry> prefix = dottedParts.subList(0, dottedParts.size() - 1);
+                if (prefix.isEmpty() || prefix.stream().allMatch(Objects::isNull)) {
+                    return;
+                }
+                this.tryApplyOriginContext();
+                this.accomplishDottedMetadataCompletions(monitor, request, dottedParts, results);
+            }
+
+            /**
+             * Build [schema, package, …, tail] parts for dotted completion.
+             * Prefer semantic nameNodes; fall back to classic word-detector split (works in WHERE values).
+             */
+            @Nullable
+            private List<SQLQueryWordEntry> resolveDottedWordParts(
+                @NotNull SQLCompletionRequest request,
+                @NotNull List<SQLQueryWordEntry> semanticParts
+            ) {
+                if (this.nameNodesAreUseful(semanticParts)) {
+                    if (semanticParts.size() > 1) {
+                        return semanticParts;
+                    }
+                    // Single identifier with a trailing period still needs an empty tail slot.
+                    if (hasPeriod && semanticParts.get(0) != null) {
+                        List<SQLQueryWordEntry> withTail = new ArrayList<>(semanticParts);
+                        withTail.add(null);
+                        return withTail;
+                    }
+                }
+
+                if (request.getWordDetector() == null) {
+                    return null;
+                }
+                String wordPart = request.getWordDetector().getWordPart();
+                if (CommonUtils.isEmpty(wordPart)) {
+                    return null;
+                }
+                // Require a '.' either in the typed fragment or reported by name inspection.
+                if (wordPart.indexOf('.') < 0 && !hasPeriod) {
+                    return null;
+                }
+                // splitWordPart uses the detector's wordPart (text before cursor, may end with '.').
+                String[] tokens = Arrays.stream(request.getWordDetector().splitWordPart())
+                    .filter(CommonUtils::isNotEmpty)
+                    .toArray(String[]::new);
+                boolean endsWithDot = wordPart != null && wordPart.endsWith(".");
+                if (tokens.length == 0) {
+                    return null;
+                }
+                // Need at least one container token plus a tail (empty after trailing '.').
+                if (!endsWithDot && tokens.length < 2 && !hasPeriod) {
+                    return null;
+                }
+
+                List<SQLQueryWordEntry> result = new ArrayList<>(tokens.length + 1);
+                int offset = request.getWordDetector().getStartOffset();
+                for (String token : tokens) {
+                    result.add(new SQLQueryWordEntry(offset, token));
+                    offset += token.length() + 1; // approximate '.' separator
+                }
+                if (endsWithDot || hasPeriod && (wordPart == null || wordPart.endsWith("."))) {
+                    // Cursor is after the last '.' — complete children of the last container token.
+                    result.add(null);
+                }
+                // If typing "lu.ort.cla" (no trailing dot), last token is the filter/tail — OK as-is.
+                if (result.size() < 2) {
+                    return null;
+                }
+                return result;
             }
 
             @NotNull
