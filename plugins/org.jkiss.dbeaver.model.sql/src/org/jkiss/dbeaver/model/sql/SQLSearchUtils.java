@@ -44,6 +44,13 @@ import java.util.List;
 public class SQLSearchUtils {
     private static final Log log = Log.getLog(SQLSearchUtils.class);
 
+    /** Dual-write completion diagnostics for IDE debug sessions. */
+    private static void dottedTrace(String message) {
+        log.debug(message);
+        System.err.println(message);
+    }
+
+
     @Nullable
     public static DBSObject findObjectByFQN(
         @NotNull DBRProgressMonitor monitor,
@@ -290,7 +297,7 @@ public class SQLSearchUtils {
             String childName = names.get(i);
             parent.cacheStructure(monitor, DBSObjectContainer.STRUCT_ENTITIES);
             DBSObject child = parent.getChild(monitor, childName);
-            log.debug("[SQLCompletion.dotted] findNestedObjects parent=" + parent.getName()
+            dottedTrace("[SQLCompletion.dotted] findNestedObjects parent=" + parent.getName()
                 + " childName=" + childName
                 + " getChild=" + (child == null ? "null" : child.getClass().getSimpleName() + "(" + child.getName() + ")"));
             if (!DBStructUtils.isConnectedContainer(child)) {
@@ -304,7 +311,7 @@ public class SQLSearchUtils {
             ) {
                 List<? extends DBSObject> objs = findProcedures(monitor, procsContainer, childName);
                 if (!objs.isEmpty()) {
-                    log.debug("[SQLCompletion.dotted] findNestedObjects procedure match for " + childName);
+                    dottedTrace("[SQLCompletion.dotted] findNestedObjects procedure match for " + childName);
                     return objs;
                 }
             }
@@ -322,24 +329,24 @@ public class SQLSearchUtils {
                                 DBSObject targetObject = alias.getTargetObject(monitor);
                                 if (targetObject != null) {
                                     child = targetObject;
-                                    log.debug("[SQLCompletion.dotted] findNestedObjects alias "
+                                    dottedTrace("[SQLCompletion.dotted] findNestedObjects alias "
                                         + candidate.getName() + " -> " + targetObject.getName());
                                     break;
                                 }
                             } else {
                                 child = candidate;
-                                log.debug("[SQLCompletion.dotted] findNestedObjects children scan match "
+                                dottedTrace("[SQLCompletion.dotted] findNestedObjects children scan match "
                                     + candidate.getClass().getSimpleName() + "(" + candidate.getName() + ")");
                                 break;
                             }
                         }
                     }
                 } catch (DBException e) {
-                    log.debug("[SQLCompletion.dotted] Error resolving child/alias: " + e.getMessage());
+                    dottedTrace("[SQLCompletion.dotted] Error resolving child/alias: " + e.getMessage());
                 }
             }
             if (child == null) {
-                log.debug("[SQLCompletion.dotted] findNestedObjects: no child '" + childName
+                dottedTrace("[SQLCompletion.dotted] findNestedObjects: no child '" + childName
                     + "' under " + parent.getName());
                 break;
             }

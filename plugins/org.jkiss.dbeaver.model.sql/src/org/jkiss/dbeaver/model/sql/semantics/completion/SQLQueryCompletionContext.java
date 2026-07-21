@@ -74,6 +74,24 @@ public abstract class SQLQueryCompletionContext {
     );
 
     /**
+     * Trace dotted-completion diagnostics to both DBeaver's debug log and stderr
+     * so IDE debug consoles show the messages without hunting log files.
+     * Remove/reduce once the Oracle schema.package completion issue is closed.
+     */
+    static void dottedTrace(@NotNull String message) {
+        log.debug(message);
+        System.err.println(message);
+    }
+
+    static void dottedTrace(@NotNull String message, @Nullable Throwable t) {
+        log.debug(message, t);
+        System.err.println(message);
+        if (t != null) {
+            t.printStackTrace(System.err);
+        }
+    }
+
+    /**
      * Returns maximum length of all keywords
      */
     public static int getMaxKeywordLength() {
@@ -316,7 +334,7 @@ public abstract class SQLQueryCompletionContext {
 
                 List<SQLQueryCompletionSet> completionSets = new LinkedList<>();
 
-                log.debug("[SQLCompletion.dotted] prepareProposal"
+                dottedTrace("[SQLCompletion.dotted] prepareProposal"
                     + " pos=" + position
                     + " parts=" + formatWordParts(parts)
                     + " lexicalItem=" + (lexicalItem == null ? "null" : lexicalItem.getClass().getSimpleName())
@@ -351,7 +369,7 @@ public abstract class SQLQueryCompletionContext {
                 completionSets.removeIf(c -> c == null || c.getItems().isEmpty());
 
                 int totalItems = completionSets.stream().mapToInt(s -> s.getItems().size()).sum();
-                log.debug("[SQLCompletion.dotted] prepareProposal done sets=" + completionSets.size()
+                dottedTrace("[SQLCompletion.dotted] prepareProposal done sets=" + completionSets.size()
                     + " items=" + totalItems);
 
                 return completionSets;
@@ -426,7 +444,7 @@ public abstract class SQLQueryCompletionContext {
                     || syntaxInspectionResult.expectingColumnName();
                 boolean expectTable = syntaxInspectionResult.expectingTableReference();
 
-                log.debug("[SQLCompletion.dotted] prepareInspectedIdentifierCompletions"
+                dottedTrace("[SQLCompletion.dotted] prepareInspectedIdentifierCompletions"
                     + " prefix=" + formatWordParts(prefix)
                     + " tail=" + (tail == null ? "<null>" : tail.string)
                     + " expectColumn=" + expectColumn
@@ -443,7 +461,7 @@ public abstract class SQLQueryCompletionContext {
                 if (expectTable || !prefix.isEmpty()) {
                     this.accomplishTableReference(monitor, request, defaultContext, prefix, tail, results);
                 } else if (!expectColumn) {
-                    log.debug("[SQLCompletion.dotted] prepareInspectedIdentifierCompletions: no path matched");
+                    dottedTrace("[SQLCompletion.dotted] prepareInspectedIdentifierCompletions: no path matched");
                 }
             }
 
@@ -456,14 +474,14 @@ public abstract class SQLQueryCompletionContext {
                 @NotNull List<SQLQueryCompletionSet> results
             ) {
                 if (dbcExecutionContext == null || dbcExecutionContext.getDataSource() == null || !DBStructUtils.isConnectedContainer(dbcExecutionContext.getDataSource())) {
-                    log.debug("[SQLCompletion.dotted] accomplishTableReference: no connected execution context");
+                    dottedTrace("[SQLCompletion.dotted] accomplishTableReference: no connected execution context");
                 } else if (prefix.isEmpty()) {
                     this.prepareTableCompletions(monitor, request, context.getKnownSources(), tail, results);
                 } else {
                     List<String> contextName = prefix.stream().map(e -> e.string).collect(Collectors.toList());
                     DBSObject prefixObject = this.resolveDottedPrefixObject(monitor, request, contextName);
 
-                    log.debug("[SQLCompletion.dotted] accomplishTableReference prefix=" + contextName
+                    dottedTrace("[SQLCompletion.dotted] accomplishTableReference prefix=" + contextName
                         + " resolved=" + describeObject(prefixObject));
 
                     if (prefixObject != null) {
@@ -476,11 +494,11 @@ public abstract class SQLQueryCompletionContext {
                             prefixInfo,
                             tail
                         );
-                        log.debug("[SQLCompletion.dotted] accomplishTableReference children=" + items.size()
+                        dottedTrace("[SQLCompletion.dotted] accomplishTableReference children=" + items.size()
                             + " for " + describeObject(prefixObject));
                         this.makeFilteredCompletionSet(prefix.isEmpty() ? tail : prefix.get(0), items, results);
                     } else {
-                        log.debug("[SQLCompletion.dotted] accomplishTableReference: prefix object not found for " + contextName);
+                        dottedTrace("[SQLCompletion.dotted] accomplishTableReference: prefix object not found for " + contextName);
                     }
                 }
             }
@@ -507,7 +525,7 @@ public abstract class SQLQueryCompletionContext {
                     !request.isSimpleMode(),
                     request.getWordDetector()
                 );
-                log.debug("[SQLCompletion.dotted] resolve FQN from root=" + root.getName()
+                dottedTrace("[SQLCompletion.dotted] resolve FQN from root=" + root.getName()
                     + " name=" + contextName
                     + " -> " + describeObject(prefixObject)
                     + " simpleMode=" + request.isSimpleMode()
@@ -531,7 +549,7 @@ public abstract class SQLQueryCompletionContext {
                                     !request.isSimpleMode(),
                                     request.getWordDetector()
                                 );
-                                log.debug("[SQLCompletion.dotted] resolve FQN from public scope=" + scope.getName()
+                                dottedTrace("[SQLCompletion.dotted] resolve FQN from public scope=" + scope.getName()
                                     + " name=" + contextName
                                     + " -> " + describeObject(prefixObject));
                                 if (prefixObject != null) {
@@ -539,7 +557,7 @@ public abstract class SQLQueryCompletionContext {
                                 }
                             }
                         } catch (DBException e) {
-                            log.debug("[SQLCompletion.dotted] public scope lookup failed: " + e.getMessage());
+                            dottedTrace("[SQLCompletion.dotted] public scope lookup failed: " + e.getMessage());
                         }
                     }
                 }
@@ -547,7 +565,7 @@ public abstract class SQLQueryCompletionContext {
                 if (prefixObject != null) {
                     DBSObject expanded = SQLQueryConnectionContext.expandAliases(monitor, prefixObject);
                     if (expanded != null && expanded != prefixObject) {
-                        log.debug("[SQLCompletion.dotted] expandAliases "
+                        dottedTrace("[SQLCompletion.dotted] expandAliases "
                             + describeObject(prefixObject) + " -> " + describeObject(expanded));
                         prefixObject = expanded;
                     }
@@ -585,7 +603,7 @@ public abstract class SQLQueryCompletionContext {
                     expectedTypes.add(DBSProcedure.class);
                     try {
                         Collection<? extends DBSObject> rawChildren = container.getChildren(monitor);
-                        log.debug("[SQLCompletion.dotted] accomplishTableReferences container="
+                        dottedTrace("[SQLCompletion.dotted] accomplishTableReferences container="
                             + describeObject(prefixContext)
                             + " rawChildren=" + (rawChildren == null ? -1 : rawChildren.size())
                             + " filter=" + (filterOrNull == null ? "<null>" : filterOrNull.string)
@@ -602,14 +620,14 @@ public abstract class SQLQueryCompletionContext {
                         int afterChildren = items.size();
                         // Package members are often exposed via DBSProcedureContainer rather than getChildren alone.
                         this.collectDottedPrefixProcedures(monitor, request, prefixContext, prefixInfo, filterOrNull, items);
-                        log.debug("[SQLCompletion.dotted] accomplishTableReferences afterChildren=" + afterChildren
+                        dottedTrace("[SQLCompletion.dotted] accomplishTableReferences afterChildren=" + afterChildren
                             + " afterProcedures=" + items.size());
                     } catch (DBException e) {
-                        log.debug("[SQLCompletion.dotted] accomplishTableReferences failed: " + e.getMessage(), e);
+                        dottedTrace("[SQLCompletion.dotted] accomplishTableReferences failed: " + e.getMessage(), e);
                         log.error(e);
                     }
                 } else {
-                    log.debug("[SQLCompletion.dotted] accomplishTableReferences: not a container "
+                    dottedTrace("[SQLCompletion.dotted] accomplishTableReferences: not a container "
                         + describeObject(prefixContext));
                 }
                 return items;
@@ -631,7 +649,7 @@ public abstract class SQLQueryCompletionContext {
                     || prefixContext instanceof DBSSchema
                     || prefixContext instanceof DBSCatalog
                 ) {
-                    log.debug("[SQLCompletion.dotted] collectDottedPrefixProcedures skip "
+                    dottedTrace("[SQLCompletion.dotted] collectDottedPrefixProcedures skip "
                         + describeObject(prefixContext)
                         + " isProcContainer=" + (prefixContext instanceof DBSProcedureContainer)
                         + " isSchema=" + (prefixContext instanceof DBSSchema)
@@ -640,15 +658,15 @@ public abstract class SQLQueryCompletionContext {
                 }
                 DBPDataSource dataSource = request.getContext().getDataSource();
                 if (dataSource == null || !dataSource.getInfo().supportsStoredCode()) {
-                    log.debug("[SQLCompletion.dotted] collectDottedPrefixProcedures: stored code not supported");
+                    dottedTrace("[SQLCompletion.dotted] collectDottedPrefixProcedures: stored code not supported");
                     return;
                 }
                 Collection<? extends DBSProcedure> procedures = pc.getProcedures(monitor);
                 if (procedures == null) {
-                    log.debug("[SQLCompletion.dotted] collectDottedPrefixProcedures: getProcedures returned null");
+                    dottedTrace("[SQLCompletion.dotted] collectDottedPrefixProcedures: getProcedures returned null");
                     return;
                 }
-                log.debug("[SQLCompletion.dotted] collectDottedPrefixProcedures package="
+                dottedTrace("[SQLCompletion.dotted] collectDottedPrefixProcedures package="
                     + describeObject(prefixContext) + " procedures=" + procedures.size());
                 Set<String> alreadyProposed = items.stream()
                     .map(i -> i.getObject() != null ? i.getObject().getName() : null)
@@ -998,7 +1016,7 @@ public abstract class SQLQueryCompletionContext {
                 @NotNull List<SQLQueryCompletionSet> results
             ) {
                 int before = countCompletionItems(results);
-                log.debug("[SQLCompletion.dotted] fromOriginOrFallback origin="
+                dottedTrace("[SQLCompletion.dotted] fromOriginOrFallback origin="
                     + (origin == null ? "null" : origin.getClass().getSimpleName())
                     + " parts=" + formatWordParts(parts)
                     + " filter=" + (originBasedFilterOrNull == null ? "<null>" : originBasedFilterOrNull.string)
@@ -1018,13 +1036,13 @@ public abstract class SQLQueryCompletionContext {
 
                 if (origin == null || !originHelped) {
                     // No usable origin: full inspected path (columns + dotted metadata).
-                    log.debug("[SQLCompletion.dotted] fromOriginOrFallback: full inspected path"
+                    dottedTrace("[SQLCompletion.dotted] fromOriginOrFallback: full inspected path"
                         + " originHelped=" + originHelped);
                     this.prepareInspectedIdentifierCompletions(monitor, request, parts, results);
                 } else if (hasDottedPrefix) {
                     // Origin may have proposed alias columns only; still resolve schema.package via metadata.
                     // Skip re-running column alias path to avoid duplicates.
-                    log.debug("[SQLCompletion.dotted] fromOriginOrFallback: dotted metadata fallback only");
+                    dottedTrace("[SQLCompletion.dotted] fromOriginOrFallback: dotted metadata fallback only");
                     this.accomplishDottedMetadataCompletions(monitor, request, parts, results);
                 }
             }
@@ -1070,12 +1088,12 @@ public abstract class SQLQueryCompletionContext {
             ) {
                 SQLQueryCompletionContext completionContext = this;
                 if (!origin.isChained() && !origin.isApplicable(syntaxInspectionResult)) {
-                    log.debug("[SQLCompletion.dotted] fromKnownOrigin skipped: not applicable"
+                    dottedTrace("[SQLCompletion.dotted] fromKnownOrigin skipped: not applicable"
                         + " chained=" + origin.isChained()
                         + " origin=" + origin.getClass().getSimpleName());
                     return;
                 }
-                log.debug("[SQLCompletion.dotted] fromKnownOrigin applying " + origin.getClass().getSimpleName());
+                dottedTrace("[SQLCompletion.dotted] fromKnownOrigin applying " + origin.getClass().getSimpleName());
                 origin.apply(new SQLQuerySymbolOrigin.Visitor() {
                     @Override
                     public void visitDbObjectFromDbObject(SQLQuerySymbolOrigin.DbObjectFromDbObject origin) {
